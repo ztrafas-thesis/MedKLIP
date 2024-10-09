@@ -1,0 +1,1 @@
+python Sample_Finetuning_SIIMACR/I1_classification/train_medklip.py --config Sample_Finetuning_SIIMACR/I1_classification/configs/deformable.yaml --output_dir output/deformable
