@@ -1,5 +1,7 @@
 text_encoder: 'emilyalsentzer/Bio_ClinicalBERT'
 disease_book: Sample_Finetuning_SIIMACR/I1_classification/data_file/observation explanation.json
+data_path: /home/zuzanna/rsna/train
+undersample: False
 
 image_res: 224
 batch_size: 2

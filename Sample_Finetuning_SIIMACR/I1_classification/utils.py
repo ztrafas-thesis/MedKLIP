@@ -8,6 +8,29 @@ import datetime
 import torch
 import torch.distributed as dist
 
+class EarlyStopping:
+    def __init__(self, patience=5, verbose=False):
+        self.patience = patience
+        self.verbose = verbose
+        self.counter = 0
+        self.best_score = None
+        self.early_stop = False
+
+    def __call__(self, val_loss):
+        score = -val_loss  # We want to maximize validation loss
+
+        if self.best_score is None:
+            self.best_score = score
+        elif score < self.best_score:
+            self.counter += 1
+            if self.verbose:
+                print(f'Validation loss did not improve for {self.counter}/{self.patience} epochs.')
+            if self.counter >= self.patience:
+                self.early_stop = True
+        else:
+            self.best_score = score
+            self.counter = 0
+
 class SmoothedValue(object):
     """Track a series of values and provide access to smoothed values over a
     window or the global series average.

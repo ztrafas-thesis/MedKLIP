@@ -6,8 +6,19 @@ __pycache__/
 output/
 checkpoints/
 wandb/
+Pretrained_MoedKLIP/data_file/*
 
 # Ignore other unwanted files
 *.log
 *.out
 *.DS_Store
+*.zip
+build/
+*.o
+*.so
+*.egg-info
+*.cu
+*.cuh
+*.h
+*.cpp
+*.egg

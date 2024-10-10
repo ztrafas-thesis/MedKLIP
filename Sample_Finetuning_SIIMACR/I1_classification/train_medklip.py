@@ -21,6 +21,9 @@ from dataset.dataset_rsna import RSNA_Dataset
 from scheduler import create_scheduler
 from optim import create_optimizer
 import wandb
+import torchxrayvision as xrv
+from sklearn.model_selection import train_test_split
+from utils import EarlyStopping
 
 
 def compute_AUCs(gt, pred, n_class):
@@ -71,14 +74,15 @@ def train(model, data_loader, optimizer, criterion, epoch, warmup_steps, device,
 
         loss = criterion(pred_class,label)
         loss.backward()
-        optimizer.step()    
+        optimizer.step()  
         writer.add_scalar('loss/loss', loss, scalar_step)
         wandb.log({"train/loss": loss.item(), "step": scalar_step})
         scalar_step += 1
 
         metric_logger.update(loss=loss.item())
         if epoch==0 and i%step_size==0 and i<=warmup_iterations: 
-            scheduler.step(i//step_size)         
+            scheduler.step(i//step_size)
+     
         metric_logger.update(lr = scheduler._get_lr(epoch)[0])
     
     # gather the stats from all processes
@@ -154,7 +158,7 @@ def valid(model, data_loader, criterion,epoch,device,config,writer):
 
 
 def main(args, config):
-    wandb.init(project="MedKLIP_debug", config=config)
+    wandb.init(project="DeformableMedKLIP", config=config)
     device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print("Total CUDA devices: ", torch.cuda.device_count()) 
     torch.set_default_tensor_type('torch.FloatTensor')
@@ -165,7 +169,11 @@ def main(args, config):
 
     #### Dataset #### 
     print("Creating dataset")
-    train_dataset = RSNA_Dataset(is_train = True) 
+    rsna = xrv.datasets.RSNA_Pneumonia_Dataset(imgpath=config['data_path'],views=["PA","AP"])  
+    indices = list(range(len(rsna)))
+    train_indices, val_indices = train_test_split(indices, test_size=0.3, random_state=42)
+
+    train_dataset = RSNA_Dataset(rsna, train_indices, is_train = True, undersample=config['undersample']) 
     train_dataloader = DataLoader(
             train_dataset,
             batch_size=config['batch_size'],
@@ -177,7 +185,7 @@ def main(args, config):
             drop_last=True,
         )            
     
-    val_dataset = RSNA_Dataset(is_train = False) 
+    val_dataset = RSNA_Dataset(rsna, val_indices, is_train = False) 
     val_dataloader = DataLoader(
             val_dataset,
             batch_size=config['batch_size'],
@@ -208,7 +216,7 @@ def main(args, config):
     model = nn.DataParallel(model, device_ids = [i for i in range(torch.cuda.device_count())])
     model = model.to(device)  
 
-    wandb.watch(model, log="all", log_freq=20)
+    # wandb.watch(model, log="all", log_freq=20)
 
     arg_opt = utils.AttrDict(config['optimizer'])
     optimizer = create_optimizer(arg_opt, model)
@@ -239,6 +247,8 @@ def main(args, config):
 
     best_val_loss = 10.0
     writer = SummaryWriter(os.path.join(args.output_dir,  'log'))
+    early_stopping = EarlyStopping(patience=5, verbose=True)
+
     for epoch in range(start_epoch, max_epoch):
         if epoch>0:
             lr_scheduler.step(epoch+warmup_steps)
@@ -255,6 +265,12 @@ def main(args, config):
         val_loss = valid(model, val_dataloader, criterion,epoch,device,config,writer)
         writer.add_scalar('loss/val_loss_epoch', val_loss, epoch)
         wandb.log({"val/loss_epoch": val_loss, "epoch": epoch}) 
+
+        # Early stopping check
+        early_stopping(val_loss)
+        if early_stopping.early_stop:
+            print(f"Early stopping at epoch {epoch}")
+            break
 
         if utils.is_main_process():  
             log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},

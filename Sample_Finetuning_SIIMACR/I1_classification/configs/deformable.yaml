@@ -1,8 +1,10 @@
 text_encoder: 'emilyalsentzer/Bio_ClinicalBERT'
 disease_book: Sample_Finetuning_SIIMACR/I1_classification/data_file/observation explanation.json
+data_path: /home/zuzanna/rsna/train
+undersample: False
 
 image_res: 224
-batch_size: 2
+batch_size: 32
 test_batch_size: 2
 num_classes: 1
 d_model: 256
@@ -17,7 +19,8 @@ H: 4
 dropout: 0.1
 attribute_set_size: 2
 deformable: True
-positional_encoding: sine
+position_embedding: sine
+num_feature_levels: 4
 
 optimizer: {opt: adamW, lr: 1e-5, weight_decay: 0.02}
 schedular: {sched: cosine, lr: 1e-5, epochs: 20, min_lr: 1e-5, decay_rate: 1, warmup_lr: 1e-5, warmup_epochs: 20, cooldown_epochs: 0}

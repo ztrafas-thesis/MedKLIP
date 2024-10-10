@@ -7,9 +7,6 @@ import numpy as np
 from torch.nn.utils.rnn import pad_sequence
 import torch.nn.functional as F
 from .transformer import *
-from .backbone import build_backbone
-from .deformable_transformer import DeformableTransformer
-from .util.misc import NestedTensor, nested_tensor_from_tensor_list
 import torchvision.models as models
 from einops import rearrange
 from transformers import AutoModel
@@ -31,7 +28,7 @@ class MedKLIP(nn.Module):
     def __init__(self, config, ana_book, disease_book, mode='train'):
         super(MedKLIP, self).__init__()
 
-        self.config = config
+        self.mode = mode
         self.d_model = config['d_model']
         # ''' book embedding'''
         with torch.no_grad():
@@ -42,7 +39,7 @@ class MedKLIP(nn.Module):
             self.disease_book = self.disease_book.last_hidden_state[:,0,:]
         self.disease_embedding_layer = nn.Linear(768,256)
         self.cl_fc = nn.Linear(256,768)
-
+        
         self.disease_name = [
             'normal', 'clear', 'sharp', 'sharply', 'unremarkable', 'intact', 'stable', 'free',
             'effusion', 'opacity', 'pneumothorax', 'edema', 'atelectasis', 'tube', 'consolidation', 'process', 'abnormality', 'enlarge', 'tip', 'low',
@@ -64,64 +61,37 @@ class MedKLIP(nn.Module):
             'hernia'
         ]
         
-        self.keep_class_dim = [self.disease_name.index(i) for i in self.disease_name if i not in self.excluded_disease ]        
-        
+        self.keep_class_dim = [self.disease_name.index(i) for i in self.disease_name if i not in self.excluded_disease ]
         ''' visual backbone'''
-        if config['deformable'] == False:   
-            self.resnet_dict = {"resnet18": models.resnet18(pretrained=False),
-                                "resnet50": models.resnet50(pretrained=False)}
-            resnet = self._get_res_basemodel(config['res_base_model'])
-            num_ftrs = int(resnet.fc.in_features/2)
-            self.res_features = nn.Sequential(*list(resnet.children())[:-3])
-            self.res_l1 = nn.Linear(num_ftrs, num_ftrs)
-            self.res_l2 = nn.Linear(num_ftrs, self.d_model)
-        else:
-            self.backbone = build_backbone(config)
-            if config['num_feature_levels'] > 1:
-                num_backbone_outs = len(self.backbone.strides)
-                input_proj_list = []
-                for _ in range(num_backbone_outs):
-                    in_channels = self.backbone.num_channels[_]
-                    input_proj_list.append(nn.Sequential(
-                        nn.Conv2d(in_channels, self.d_model, kernel_size=1),
-                        nn.GroupNorm(32, self.d_model),
-                    ))
-                for _ in range(config['num_feature_levels'] - num_backbone_outs):
-                    input_proj_list.append(nn.Sequential(
-                        nn.Conv2d(in_channels, self.d_model, kernel_size=3, stride=2, padding=1),
-                        nn.GroupNorm(32, self.d_model),
-                    ))
-                    in_channels = self.d_model
-                self.input_proj = nn.ModuleList(input_proj_list)
-            else:
-                self.input_proj = nn.ModuleList([
-                    nn.Sequential(
-                        nn.Conv2d(self.backbone.num_channels[0], self.d_model, kernel_size=1),
-                        nn.GroupNorm(32, self.d_model),
-                    )])
+        self.resnet_dict = {"resnet18": models.resnet18(pretrained=False),
+                            "resnet50": models.resnet50(pretrained=False)}
+        resnet = self._get_res_basemodel(config['res_base_model'])
+        num_ftrs = int(resnet.fc.in_features/2)
+        self.res_features = nn.Sequential(*list(resnet.children())[:-3])
+        self.res_l1 = nn.Linear(num_ftrs, num_ftrs)
+        self.res_l2 = nn.Linear(num_ftrs, self.d_model)
 
 
         ###################################
         ''' Query Decoder'''
         ###################################
-        if config['deformable'] == False:
-            self.H = config['H'] 
-            decoder_layer = TransformerDecoderLayer(self.d_model, config['H'] , 1024,
-                                            0.1, 'relu',normalize_before=True)
-            decoder_norm = nn.LayerNorm(self.d_model)
-            self.decoder = TransformerDecoder(decoder_layer, config['N'] , decoder_norm,
-                                    return_intermediate=False)
-        else:
-            self.transformer = DeformableTransformer(num_encoder_layers=6, num_decoder_layers=6, num_feature_levels=config['num_feature_levels'],nhead=8)
+
+        self.H = config['H'] 
+        decoder_layer = TransformerDecoderLayer(self.d_model, config['H'] , 1024,
+                                        0.1, 'relu',normalize_before=True)
+        decoder_norm = nn.LayerNorm(self.d_model)
+        self.decoder = TransformerDecoder(decoder_layer, config['N'] , decoder_norm,
+                                  return_intermediate=False)
 
         # Learnable Queries
+        #self.query_embed = nn.Embedding(config['num_queries'] ,self.d_model)
         self.dropout_feas = nn.Dropout(config['dropout'] )
 
         # Attribute classifier
         self.classifier = nn.Linear(self.d_model,config['attribute_set_size'])
 
-        # Class classifier
-        # self.classifier = nn.Linear(self.d_model,config['num_classes'])
+        # # Class classifier
+        # self.cls_classifier = nn.Linear(self.d_model,args.num_classes)
 
         self.apply(self._init_weights)
 
@@ -169,64 +139,24 @@ class MedKLIP(nn.Module):
         return out_emb
 
     def forward(self, images,labels,smaple_index = None, is_train = True, no_cl= False, exclude_class= False):
+
+        # labels batch,51,75 binary_label batch,75 sample_index batch,index
         B = images.shape[0]
-        
         device = images.device
         ''' Visual Backbone '''
-        if self.config['deformable'] == False:
-            x = self.image_encoder(images) #batch_size,patch_num,dim
-            features = x.transpose(0,1) #patch_num b dim
-            # print(features.shape)
-            # torch.Size([196, 2, 256])
-        
-        else:
-            samples = nested_tensor_from_tensor_list(images) # NestedTensor(images, torch.ones(B, images.size(2), images.size(3))).to(device)
-            features, pos = self.backbone(samples)
+        x = self.image_encoder(images) #batch_size,patch_num,dim
 
-            srcs = []
-            masks = []
-            for l, feat in enumerate(features):
-                src, mask = feat.decompose()
-                srcs.append(self.input_proj[l](src))
-                masks.append(mask)
-                assert mask is not None
-            if self.config['num_feature_levels'] > len(srcs):
-                _len_srcs = len(srcs)
-                for l in range(_len_srcs, self.config['num_feature_levels']):
-                    if l == _len_srcs:
-                        src = self.input_proj[l](features[-1].tensors)
-                    else:
-                        src = self.input_proj[l](srcs[-1])
-                    m = samples.mask
-                    mask = F.interpolate(m[None].float(), size=src.shape[-2:]).to(torch.bool)[0]
-                    pos_l = self.backbone[1](NestedTensor(src, mask)).to(src.dtype)
-                    srcs.append(src)
-                    masks.append(mask)
-                    pos.append(pos_l)
-
-            # print('srcs:', [src.shape for src in srcs])
-            # print('masks:', [mask.shape for mask in masks])
-            # srcs: [torch.Size([2, 256, 7, 7]), torch.Size([2, 256, 4, 4]), torch.Size([2, 256, 2, 2]), torch.Size([2, 256, 1, 1])]
-            # masks: [torch.Size([2, 7, 7]), torch.Size([2, 4, 4]), torch.Size([2, 2, 2]), torch.Size([2, 1, 1])]
-
-            # features = srcs[1].flatten(2)  # [2, 256, 49]
-            # features = features.permute(2, 0, 1)
         
         
+        
+
+        features = x.transpose(0,1) #patch_num b dim
+        #query_embed = self.query_embed.weight.unsqueeze(1).repeat(1, B, 1) # query_number, batch, dim
         query_embed = self.disease_embedding_layer(self.disease_book)
         query_embed = query_embed.unsqueeze(1).repeat(1, B, 1)
-
-        if self.config['deformable'] == False:
-            features,ws = self.decoder(query_embed, features, 
-                memory_key_padding_mask=None, pos=None, query_pos=None)
-            
-        else:
-            # print('query_embed:',query_embed.shape)
-            # query_embed: torch.Size([75, 2, 256])
-            features = self.transformer(srcs, masks, pos, query_embed)
-            ws = None
+        features,ws = self.decoder(query_embed, features, 
+            memory_key_padding_mask=None, pos=None, query_pos=None)
         out = self.dropout_feas(features)
- 
         if is_train == True and no_cl == False:
             anatomy_query = self.ana_book[smaple_index,:] # batch, Q , position_num ,dim
             # [Q,B,A]
@@ -279,6 +209,9 @@ class MedKLIP(nn.Module):
         else:
             return loss,x,ws
         
+
+
+
     @staticmethod
     def _init_weights(module):
         r"""Initialize weights like BERT - N(0.0, 0.02), bias = 0."""
