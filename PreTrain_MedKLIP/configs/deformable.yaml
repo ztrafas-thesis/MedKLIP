@@ -3,6 +3,7 @@ valid_file: /home/zuzanna/MedKLIP/PreTrain_MedKLIP/data_file/debug.json
 test_file: /home/zuzanna/MedKLIP/PreTrain_MedKLIP/data_file/debug.json
 label_file: /home/zuzanna/MedKLIP/PreTrain_MedKLIP/data_file/landmark_observation_adj_mtx.npy
 disease_book: /home/zuzanna/MedKLIP/PreTrain_MedKLIP/data_file/observation explanation.json
+mimic_file: /mnt/nas/Users/Mori/zuzanna/mimic-h5
 
 image_res: 224
 patch_size: 16

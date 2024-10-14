@@ -21,6 +21,7 @@ import utils
 from scheduler import create_scheduler
 from optim import create_optimizer
 from dataset.dataset import MedKLIP_Dataset
+from dataset.mimic import MIMIC_Dataset
 from models.model_MedKLIP import MedKLIP
 from models.tokenization_bert import BertTokenizer
 import wandb
@@ -114,7 +115,8 @@ def main(args, config):
 
     #### Dataset #### 
     print("Creating dataset")
-    train_datasets = MedKLIP_Dataset(config['train_file'],config['label_file'], mode = 'train')
+    # train_datasets = MedKLIP_Dataset(config['train_file'],config['label_file'], mode = 'train')
+    train_datasets = MIMIC_Dataset(config['mimic_file'],config['label_file'], mode = 'train')
     train_dataloader = DataLoader(
             train_datasets,
             batch_size=config['batch_size'],
@@ -126,7 +128,8 @@ def main(args, config):
             drop_last=True,
         )     
     
-    val_datasets = MedKLIP_Dataset(config['valid_file'],config['label_file'],mode ='train')
+    # val_datasets = MedKLIP_Dataset(config['valid_file'],config['label_file'],mode ='train')
+    val_datasets = MIMIC_Dataset(config['mimic_file'],config['label_file'], mode = 'validate')
     val_dataloader = DataLoader(
             val_datasets,
             batch_size=config['batch_size'],
