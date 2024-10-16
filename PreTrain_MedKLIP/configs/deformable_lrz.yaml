@@ -1,0 +1,41 @@
+train_file: /home/zuzanna/MedKLIP/PreTrain_MedKLIP/data_file/debug.json
+valid_file: /home/zuzanna/MedKLIP/PreTrain_MedKLIP/data_file/debug.json
+test_file: /home/zuzanna/MedKLIP/PreTrain_MedKLIP/data_file/debug.json
+label_file: /dss/dsshome1/07/ge86vil2/MedKLIP/PreTrain_MedKLIP/data_file/landmark_observation_adj_mtx.npy
+disease_book: /dss/dsshome1/07/ge86vil2/MedKLIP/PreTrain_MedKLIP/data_file/observation explanation.json
+mimic_file: /dss/dssfs02/lwp-dss-0001/pr62la/pr62la-dss-0000/ge86vil2/mimic-h5
+
+image_res: 224
+patch_size: 16
+num_sentences: 12
+num_tokens: 32
+vision_width: 768
+fea_width: 197
+embed_dim: 256
+batch_size: 64
+test_batch_size: 32
+temp: 0.07
+mlm_probability: 0.15
+queue_size: 8192
+momentum: 0.995
+alpha: 0.4
+d_model: 256
+res_base_model: 'resnet50'
+num_queries: 75
+dropout: 0.1
+attribute_set_size: 2
+N: 4
+H: 4 
+no_cl: False
+exclude_class: False
+deformable: True
+position_embedding: sine
+num_feature_levels: 4
+text_encoder: 'emilyalsentzer/Bio_ClinicalBERT'
+shuffle_ratio: 0.5
+optimizer: {opt: adamW, lr: 1e-4, weight_decay: 0.02}
+schedular: {sched: cosine, lr: 1e-4, epochs: 10, min_lr: 1e-5, decay_rate: 1, warmup_lr: 1e-5, warmup_epochs: 5, cooldown_epochs: 0}
+
+
+
+

@@ -33,7 +33,7 @@ def get_tokenizer(tokenizer,target_text):
     
     return target_tokenizer
 
-def train(model, data_loader, optimizer, epoch, warmup_steps, device, scheduler, args, config, writer):
+def train(model, data_loader, optimizer, epoch, warmup_steps, device, scheduler, args, config, writer, val_loader=None, val_every_n_steps=500, lr_step_m=100, early_stopping_patience=5):
     model.train()  
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=50, fmt='{value:.6f}'))
@@ -46,10 +46,13 @@ def train(model, data_loader, optimizer, epoch, warmup_steps, device, scheduler,
     metric_logger.update(lr = scheduler._get_lr(epoch)[0])
 
     header = 'Train Epoch: [{}]'.format(epoch)
-    print_freq = 1   
-    step_size = 100
-    warmup_iterations = warmup_steps*step_size 
-    scalar_step = epoch*len(data_loader) 
+    print_freq = 1
+    # step_size = 100
+    # warmup_iterations = warmup_steps*step_size 
+    # scalar_step = epoch*len(data_loader) 
+    best_val_loss = float('inf')
+    patience_counter = 0
+    scalar_step = epoch * len(data_loader)
 
     for i, sample in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
         
@@ -62,6 +65,7 @@ def train(model, data_loader, optimizer, epoch, warmup_steps, device, scheduler,
         loss,loss_ce,loss_cl = model(images,labels, index, is_train= True,no_cl = config['no_cl'],exclude_class = config['exclude_class'])
         loss.backward()
         optimizer.step()  
+
         wandb.log({'train/loss': loss.item(), 'train/loss_ce': loss_ce.item(), 'train/loss_cl': loss_cl.item(), 'train/lr': scheduler._get_lr(epoch)[0]})   
         writer.add_scalar('loss/loss', loss, scalar_step)
         writer.add_scalar('loss/loss_ce', loss_ce, scalar_step)
@@ -70,9 +74,35 @@ def train(model, data_loader, optimizer, epoch, warmup_steps, device, scheduler,
         metric_logger.update(loss_ce=loss_ce.item())
         metric_logger.update(loss=loss.item())
         metric_logger.update(loss_cl=loss_cl.item())
-        if epoch==0 and i%step_size==0 and i<=warmup_iterations: 
-            scheduler.step(i//step_size)         
-        metric_logger.update(lr = scheduler._get_lr(epoch)[0])
+
+        # Learning rate adjustment every m steps
+        if (i+1) % lr_step_m == 0:
+            scheduler.step(epoch + warmup_steps)
+        
+        # Validation every n steps
+        if (i+1) % val_every_n_steps == 0 and val_loader:
+            val_loss = valid(model, val_loader, epoch, device, config, writer)
+            print(f"Validation loss at step {i+1}: {val_loss}")
+            
+            # Early stopping
+            if val_loss < best_val_loss:
+                best_val_loss = val_loss
+                patience_counter = 0  # Reset patience counter if validation loss improves
+                # Save the best model checkpoint
+                save_obj = {
+                    'model': model.state_dict(),
+                    'optimizer': optimizer.state_dict(),
+                    'lr_scheduler': scheduler.state_dict(),
+                    'config': config,
+                    'epoch': epoch,
+                }
+                torch.save(save_obj, os.path.join(args.output_dir, 'checkpoint_early_stop.pth'))  
+            else:
+                patience_counter += 1
+            
+            if patience_counter >= early_stopping_patience:
+                print("Early stopping triggered")
+                return
     
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -184,7 +214,7 @@ def main(args, config):
     for epoch in range(start_epoch, max_epoch):
         if epoch>0:
             lr_scheduler.step(epoch+warmup_steps)
-        train_stats = train(model, train_dataloader, optimizer, epoch, warmup_steps, device, lr_scheduler, args,config,writer) 
+        train_stats = train(model, train_dataloader, optimizer, epoch, warmup_steps, device, lr_scheduler, args,config,writer, val_dataloader) 
 
         for k, v in train_stats.items():
             train_loss_epoch = v
@@ -193,13 +223,13 @@ def main(args, config):
         writer.add_scalar('loss/train_loss_epoch', float(train_loss_epoch), epoch)
         writer.add_scalar('loss/leaning_rate',  lr_scheduler._get_lr(epoch)[0] , epoch)
 
-        val_loss = valid(model, val_dataloader, epoch,device,config,writer)
-        wandb.log({'valid/loss_epoch': val_loss})
-        writer.add_scalar('loss/val_loss_epoch', val_loss, epoch)
+        # val_loss = valid(model, val_dataloader, epoch,device,config,writer)
+        # wandb.log({'valid/loss_epoch': val_loss})
+        # writer.add_scalar('loss/val_loss_epoch', val_loss, epoch)
 
         if utils.is_main_process():  
             log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                         'epoch': epoch, 'val_loss': val_loss.item()
+                         'epoch': epoch,
                         }                     
             save_obj = {
                 'model': model.state_dict(),
@@ -213,7 +243,7 @@ def main(args, config):
             with open(os.path.join(args.output_dir, "log.txt"),"a") as f:
                 f.write(json.dumps(log_stats) + "\n")
 
-        if epoch % 20 == 1 and epoch>1:
+        if epoch>1:
             save_obj = {
                 'model': model.state_dict(),
                 'optimizer': optimizer.state_dict(),

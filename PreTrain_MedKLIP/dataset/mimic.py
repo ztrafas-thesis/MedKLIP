@@ -51,29 +51,36 @@ class MIMIC_Dataset(Dataset):
         self.rad_graph_results = np.load(np_path)
         normalize = transforms.Normalize((0.485, 0.456, 0.406), (0.229, 0.224, 0.225))
         if mode == 'train':
-            self.transform = transforms.Compose([                        
+            self.transform = transforms.Compose([   
+                transforms.Lambda(lambda img: Image.fromarray(img) if isinstance(img, np.ndarray) else img),   
+                transforms.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),                  
                 # transforms.RandomResizedCrop(224,scale=(0.2, 1.0), interpolation=Image.BICUBIC),
                 transforms.RandomHorizontalFlip(),
                 RandomAugment(2,7,isPIL=True,augs=['Identity','AutoContrast','Equalize','Brightness','Sharpness',
                                                 'ShearX', 'ShearY', 'TranslateX', 'TranslateY', 'Rotate']),     
                 transforms.ToTensor(),
+                # transforms.Lambda(lambda img: img.repeat(3, 1, 1) if img.shape[0] == 1 else img),
                 normalize,
             ])   
         if mode == 'test':
-            self.transform = transforms.Compose([                        
-            # transforms.Resize([224, 224]),
-            # transforms.RandomHorizontalFlip(),
-            # RandomAugment(2,7,isPIL=True,augs=['Identity','AutoContrast','Equalize','Brightness','Sharpness',
-            #                                   'ShearX', 'ShearY', 'TranslateX', 'TranslateY', 'Rotate']),     
-            transforms.ToTensor(),
-            normalize,
+            self.transform = transforms.Compose([   
+                transforms.Lambda(lambda img: Image.fromarray(img) if isinstance(img, np.ndarray) else img), 
+                transforms.Lambda(lambda img: img.convert("RGB") if img.mode != "RGB" else img),                    
+                # transforms.Resize([224, 224]),
+                # transforms.RandomHorizontalFlip(),
+                # RandomAugment(2,7,isPIL=True,augs=['Identity','AutoContrast','Equalize','Brightness','Sharpness',
+                #                                   'ShearX', 'ShearY', 'TranslateX', 'TranslateY', 'Rotate']),     
+                transforms.ToTensor(),
+                # transforms.Lambda(lambda img: img.repeat(3, 1, 1) if img.shape[0] == 1 else img),
+                normalize,
             ])   
 
     def __getitem__(self, idx):
         image = self.images_dataset[idx]
+
         # report = self.reports_dataset[idx]
         label_id = self.label_ids[idx]
-        class_label = self.rad_graph_results[class_label] # (51, 75)
+        class_label = self.rad_graph_results[label_id,:,:] # (51, 75)
         labels = np.zeros(class_label.shape[-1]) -1
         labels, index_list = self.triplet_extraction(class_label)
         index_list = np.array(index_list)
@@ -81,9 +88,6 @@ class MIMIC_Dataset(Dataset):
         # Apply transformations if specified
         if self.transform:
             image = self.transform(image)
-        
-        # Convert label to tensor
-        label = torch.FloatTensor(label)
         
         return {
             "image": image,
