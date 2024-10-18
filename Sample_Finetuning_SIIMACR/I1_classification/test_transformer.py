@@ -13,16 +13,23 @@ import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from models.tokenization_bert import BertTokenizer
 from torch.utils.data import DataLoader
 from sklearn.metrics import roc_auc_score,precision_recall_curve,accuracy_score
-from models.resnet import ModelRes_ft
+# from models.resnet import ModelRes_ft
+from models.resnet_transformer import ModelRes_ft
+import json
 
 # from dataset.dataset_siim_acr import SIIM_ACR_Dataset
 from dataset.dataset_rsna import RSNA_Dataset
 import torchxrayvision as xrv
 from sklearn.model_selection import train_test_split
 
-
+def get_tokenizer(tokenizer,target_text):
+    
+    target_tokenizer = tokenizer(list(target_text), padding='max_length', truncation=True, max_length= 64, return_tensors="pt")
+    
+    return target_tokenizer
 
 def compute_AUCs(gt, pred, n_class):
     """Computes Area Under the Curve (AUC) from prediction scores.
@@ -64,9 +71,14 @@ def test(args,config):
             shuffle=False,
             collate_fn=None,
             drop_last=False,
-        )              
+        )     
+
+    json_book = json.load(open(config['disease_book'],'r'))
+    disease_book = [json_book[i] for i in json_book]
+    tokenizer = BertTokenizer.from_pretrained(config['text_encoder'])
+    disease_book_tokenizer = get_tokenizer(tokenizer,disease_book).to(device)         
     
-    model = ModelRes_ft(res_base_model='resnet50',out_size=1)
+    model = ModelRes_ft(config, disease_book_tokenizer,res_base_model='resnet50',out_size=1)
     model = nn.DataParallel(model, device_ids = [i for i in range(torch.cuda.device_count())])
     model = model.to(device) 
 

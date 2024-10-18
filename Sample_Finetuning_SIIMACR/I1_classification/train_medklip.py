@@ -11,6 +11,7 @@ from pathlib import Path
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
+import torch.nn.functional as F
 from sklearn.metrics import roc_auc_score,precision_recall_curve,accuracy_score
 import torch.backends.cudnn as cudnn
 from tensorboardX import SummaryWriter
@@ -24,20 +25,24 @@ import wandb
 import torchxrayvision as xrv
 from sklearn.model_selection import train_test_split
 from utils import EarlyStopping
-
+from torchinfo import summary
 
 def compute_AUCs(gt, pred, n_class):
+    """Computes Area Under the Curve (AUC) from prediction scores.
+    Args:
+        gt: Pytorch tensor on GPU, shape = [n_samples, n_classes]
+          true binary labels.
+        pred: Pytorch tensor on GPU, shape = [n_samples, n_classes]
+          can either be probability estimates of the positive class,
+          confidence values, or binary decisions.
+    Returns:
+        List of AUROCs of all classes.
+    """
     AUROCs = []
     gt_np = gt.cpu().numpy()
     pred_np = pred.cpu().numpy()
-    
-    # Handle single class scenario
-    if n_class == 1:
-        AUROCs.append(roc_auc_score(gt_np, pred_np))
-    else:
-        for i in range(n_class):
-            AUROCs.append(roc_auc_score(gt_np[:, i], pred_np[:, i]))
-    
+    for i in range(n_class):
+        AUROCs.append(roc_auc_score(gt_np[:, i], pred_np[:, i]))
     return AUROCs
 
 def get_tokenizer(tokenizer,target_text):
@@ -46,7 +51,7 @@ def get_tokenizer(tokenizer,target_text):
     
     return target_tokenizer
 
-def train(model, data_loader, optimizer, criterion, epoch, warmup_steps, device, scheduler, args,config,writer):
+def train(model, data_loader, optimizer, criterion, epoch, warmup_steps, device, scheduler, args,config,writer,val_loader=None, val_every_n_steps=100, lr_step_m=20, early_stopping_patience=5):
     model.train()  
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=50, fmt='{value:.6f}'))
@@ -58,7 +63,10 @@ def train(model, data_loader, optimizer, criterion, epoch, warmup_steps, device,
     print_freq = 50   
     step_size = 100
     warmup_iterations = warmup_steps*step_size 
-    scalar_step = epoch*len(data_loader)
+
+    # scalar_step = epoch*len(data_loader)
+    # best_val_loss = float('inf')
+    scalar_step = epoch * len(data_loader)
 
 
     for i, sample in enumerate(metric_logger.log_every(data_loader, print_freq, header)):
@@ -76,14 +84,18 @@ def train(model, data_loader, optimizer, criterion, epoch, warmup_steps, device,
         loss.backward()
         optimizer.step()  
         writer.add_scalar('loss/loss', loss, scalar_step)
-        wandb.log({"train/loss": loss.item(), "step": scalar_step})
+        wandb.log({"train/loss": loss.item()})
+        # wandb.log({"train/learning_rate": optimizer.param_groups[0]['lr'], "step": scalar_step})    
         scalar_step += 1
 
         metric_logger.update(loss=loss.item())
         if epoch==0 and i%step_size==0 and i<=warmup_iterations: 
-            scheduler.step(i//step_size)
-     
+            scheduler.step(i//step_size)         
         metric_logger.update(lr = scheduler._get_lr(epoch)[0])
+        # # Learning rate adjustment every m steps
+        # if (i+1) % lr_step_m == 0:
+        #     scheduler.step()
+    
     
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -100,33 +112,38 @@ def valid(model, data_loader, criterion,epoch,device,config,writer):
     for i, sample in enumerate(data_loader):
         image = sample['image']
         label = sample['label'].float().to(device)
+        if config['num_classes'] == 1:
+            label = label.unsqueeze(1)
         gt = torch.cat((gt, label), 0)
         input_image = image.to(device,non_blocking=True)  
         with torch.no_grad():
             pred_class = model(input_image)
-            if config['num_classes'] == 1:
-                label = label.unsqueeze(1)
-            pred = torch.cat((pred, pred_class), 0)
             val_loss = criterion(pred_class,label)
             val_losses.append(val_loss.item())
             writer.add_scalar('val_loss/loss', val_loss, val_scalar_step)
             wandb.log({"val/loss": val_loss.item(), "val_step": val_scalar_step})
             val_scalar_step += 1
 
+            pred_class = F.sigmoid(pred_class)
+            pred = torch.cat((pred, pred_class), 0)
+
     avg_val_loss = np.array(val_losses).mean()
+
     AUROCs = compute_AUCs(gt, pred,config['num_classes'])
     AUROC_avg = np.array(AUROCs).mean()
     wandb.log({"val/AUROC_avg": AUROC_avg, "epoch": epoch})  # Log epoch train loss to wandb
     # Check the shape of ground truth and predictions
-    if gt.ndim == 2 and gt.shape[1] > 1:  # If gt is 2D (multi-class or multi-label)
-        gt_np = gt[:, 0].cpu().numpy()  # Select the first class
-    else:  # 1D ground truth
-        gt_np = gt.cpu().numpy()
+    # if gt.ndim == 2 and gt.shape[1] > 1:  # If gt is 2D (multi-class or multi-label)
+    #     gt_np = gt[:, 0].cpu().numpy()  # Select the first class
+    # else:  # 1D ground truth
+    #     gt_np = gt.cpu().numpy()
 
-    if pred.ndim == 2 and pred.shape[1] > 1:  # If pred is 2D (multi-class or multi-label)
-        pred_np = pred[:, 0].cpu().numpy()  # Select the first class
-    else:  # 1D predictions
-        pred_np = pred.cpu().numpy()              
+    # if pred.ndim == 2 and pred.shape[1] > 1:  # If pred is 2D (multi-class or multi-label)
+    #     pred_np = pred[:, 0].cpu().numpy()  # Select the first class
+    # else:  # 1D predictions
+    #     pred_np = pred.cpu().numpy()       
+    gt_np = gt[:, 0].cpu().numpy()
+    pred_np = pred[:, 0].cpu().numpy()               
     precision, recall, thresholds = precision_recall_curve(gt_np, pred_np)
 
     numerator = 2 * recall * precision
@@ -170,8 +187,12 @@ def main(args, config):
     #### Dataset #### 
     print("Creating dataset")
     rsna = xrv.datasets.RSNA_Pneumonia_Dataset(imgpath=config['data_path'],views=["PA","AP"])  
-    indices = list(range(len(rsna)))
-    train_indices, val_indices = train_test_split(indices, test_size=0.3, random_state=42)
+    if config['undersample']:
+        train_indices = np.load('/home/zuzanna/MedKLIP/Sample_Finetuning_SIIMACR/I1_classification/data_file/train_indices.npy').tolist()
+        val_indices = np.load('/home/zuzanna/MedKLIP/Sample_Finetuning_SIIMACR/I1_classification/data_file/val_indices.npy').tolist()
+    else:
+        indices = list(range(len(rsna)))
+        train_indices, val_indices = train_test_split(indices, test_size=0.3, random_state=42)
 
     train_dataset = RSNA_Dataset(rsna, train_indices, is_train = True, undersample=config['undersample']) 
     train_dataloader = DataLoader(
@@ -234,6 +255,8 @@ def main(args, config):
         model.load_state_dict(state_dict)    
         print('load checkpoint from %s'%args.checkpoint)
     elif args.pretrain_path:
+        # summary(model, input_size=(64, 3, 224, 224))
+        # print(model.module.classifier)
         checkpoint = torch.load(args.pretrain_path, map_location='cpu')
         state_dict = checkpoint['model']
         model_dict = model.state_dict()
@@ -241,18 +264,28 @@ def main(args, config):
         model_dict.update(model_checkpoint)
         model.load_state_dict(model_dict)
         print('load pretrain_path from %s'%args.pretrain_path)
+        # checkpoint = torch.load(args.pretrain_path, map_location='cpu')
+        # state_dict = checkpoint['model']
+        # model_dict = model.state_dict()
+        # pretrained_dict = {k: v for k, v in checkpoint.items() if 'classifier' not in k and k in model_dict}
+        # # model_checkpoint = {k:v for k,v in state_dict.items() if k in model_dict}
+        # # model_dict.update(model_checkpoint)
+        # model_dict.update(pretrained_dict)
+        # model.load_state_dict(model_dict)
+        # model.load_state_dict(model_dict)
+        # print('load pretrain_path from %s'%args.pretrain_path)
 
     print("Start training")
     start_time = time.time()
 
     best_val_loss = 10.0
     writer = SummaryWriter(os.path.join(args.output_dir,  'log'))
-    early_stopping = EarlyStopping(patience=5, verbose=True)
+    # early_stopping = EarlyStopping(patience=5, verbose=True)
 
     for epoch in range(start_epoch, max_epoch):
         if epoch>0:
             lr_scheduler.step(epoch+warmup_steps)
-        train_stats = train(model, train_dataloader, optimizer, criterion,epoch, warmup_steps, device, lr_scheduler, args,config,writer) 
+        train_stats = train(model, train_dataloader, optimizer, criterion,epoch, warmup_steps, device, lr_scheduler, args,config,writer, val_dataloader) 
 
         for k, v in train_stats.items():
             train_loss_epoch = v
@@ -266,15 +299,15 @@ def main(args, config):
         writer.add_scalar('loss/val_loss_epoch', val_loss, epoch)
         wandb.log({"val/loss_epoch": val_loss, "epoch": epoch}) 
 
-        # Early stopping check
-        early_stopping(val_loss)
-        if early_stopping.early_stop:
-            print(f"Early stopping at epoch {epoch}")
-            break
+        # # Early stopping check
+        # early_stopping(val_loss)
+        # if early_stopping.early_stop:
+        #     print(f"Early stopping at epoch {epoch}")
+        #     break
 
         if utils.is_main_process():  
             log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
-                         'epoch': epoch, 'val_loss': val_loss.item()
+                         'epoch': epoch,
                         }                     
             save_obj = {
                 'model': model.state_dict(),
@@ -287,7 +320,7 @@ def main(args, config):
             
             with open(os.path.join(args.output_dir, "log.txt"),"a") as f:
                 f.write(json.dumps(log_stats) + "\n")
-        
+
         if val_loss < best_val_loss:
             save_obj = {
                 'model': model.state_dict(),
@@ -300,7 +333,8 @@ def main(args, config):
             best_val_loss = val_loss
             args.model_path = os.path.join(args.output_dir, 'best_valid.pth')
         
-        if epoch % 20 == 1 and epoch>1:
+        
+        if epoch % 10 == 1 and epoch>1:
             save_obj = {
                 'model': model.state_dict(),
                 'optimizer': optimizer.state_dict(),

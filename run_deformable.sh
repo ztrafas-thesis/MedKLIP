@@ -1,2 +1,2 @@
-python PreTrain_MedKLIP/train_MedKLIP.py --config PreTrain_MedKLIP/configs/deformable.yaml --output_dir output/pretrain/deformable
-python Sample_Finetuning_SIIMACR/I1_classification/train_medklip.py --config Sample_Finetuning_SIIMACR/I1_classification/configs/deformable.yaml --output_dir output/deformable
+# python PreTrain_MedKLIP/train_MedKLIP.py --config PreTrain_MedKLIP/configs/deformable.yaml --output_dir output/pretrain/deformable
+python Sample_Finetuning_SIIMACR/I1_classification/train_medklip.py --config Sample_Finetuning_SIIMACR/I1_classification/configs/deformable.yaml --output_dir output/deformable_finetune --pretrain_path /home/zuzanna/MedKLIP/output/deformable_pretrain/checkpoint_early_stop.pth

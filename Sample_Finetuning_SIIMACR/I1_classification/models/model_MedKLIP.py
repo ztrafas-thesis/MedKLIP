@@ -97,9 +97,9 @@ class MedKLIP(nn.Module):
         # self.classifier = nn.Linear(self.d_model,config['attribute_set_size'])
 
         # Class classifier
-        self.classifier = nn.Linear(self.d_model,config['num_classes'])
+        self.cls_classifier = nn.Linear(self.d_model,config['num_classes'])
 
-        self.apply(self._init_weights)
+        # self.apply(self._init_weights)
 
     def _get_res_basemodel(self, res_model_name):
         try:
@@ -201,7 +201,7 @@ class MedKLIP(nn.Module):
             # query_embed: torch.Size([75, 2, 256])
             features = self.transformer(srcs, masks, pos, query_embed)
         out = self.dropout_feas(features)
-        x= self.classifier(out).transpose(0,1) #B query Atributes
+        x= self.cls_classifier(out).transpose(0,1) #B query Atributes
 
         x = x.mean(dim=1) 
         

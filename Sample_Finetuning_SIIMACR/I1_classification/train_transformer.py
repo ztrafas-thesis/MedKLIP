@@ -7,16 +7,19 @@ import time
 import datetime
 import json
 from pathlib import Path
+from torchinfo import summary
 
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
 import torch.backends.cudnn as cudnn
 from test_res_ft import test
+from models.tokenization_bert import BertTokenizer
 from tensorboardX import SummaryWriter
 import utils
-from models.resnet import ModelRes_ft
-from test_res_ft import test
+# from models.resnet import ModelRes_ft
+from models.resnet_transformer import ModelRes_ft
+from test_transformer import test
 # from dataset.dataset_siim_acr import SIIM_ACR_Dataset
 from dataset.dataset_rsna import RSNA_Dataset
 import torchxrayvision as xrv
@@ -24,6 +27,11 @@ from sklearn.model_selection import train_test_split
 from scheduler import create_scheduler
 from optim import create_optimizer
 
+def get_tokenizer(tokenizer,target_text):
+    
+    target_tokenizer = tokenizer(list(target_text), padding='max_length', truncation=True, max_length= 64, return_tensors="pt")
+    
+    return target_tokenizer
 
 def train(model, data_loader, optimizer, criterion, epoch, warmup_steps, device, scheduler, args,config,writer):
     model.train()  
@@ -124,8 +132,13 @@ def main(args, config):
             collate_fn=None,
             drop_last=False,
         )
+    
+    json_book = json.load(open(config['disease_book'],'r'))
+    disease_book = [json_book[i] for i in json_book]
+    tokenizer = BertTokenizer.from_pretrained(config['text_encoder'])
+    disease_book_tokenizer = get_tokenizer(tokenizer,disease_book).to(device)
 
-    model = ModelRes_ft(res_base_model='resnet50',out_size=1)
+    model = ModelRes_ft(config, disease_book_tokenizer,res_base_model='resnet50',out_size=1)
     model = nn.DataParallel(model, device_ids = [i for i in range(torch.cuda.device_count())])
     model = model.to(device) 
 
@@ -145,6 +158,8 @@ def main(args, config):
         model.load_state_dict(state_dict)    
         print('load checkpoint from %s'%args.checkpoint)
     elif args.pretrain_path:
+        # summary(model, input_size=(64, 3, 224, 224))
+        # print(model.module.classifier)
         checkpoint = torch.load(args.pretrain_path, map_location='cpu')
         state_dict = checkpoint['model']
         model_dict = model.state_dict()

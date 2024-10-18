@@ -1,0 +1,1 @@
+python Sample_Finetuning_SIIMACR/I1_classification/train_transformer.py --config Sample_Finetuning_SIIMACR/I1_classification/configs/Res_train.yaml --output_dir output/resnet_transformer --pretrain_path /home/zuzanna/vlm-chest-xray/checkpoints/checkpoint_final.pth

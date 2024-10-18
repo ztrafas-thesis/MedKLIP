@@ -32,26 +32,7 @@ class RSNA_Dataset(Dataset):
                 normalize,
             ]) 
 
-        if is_train and undersample:
-            # Split into majority (label 0) and minority (label 1) classes
-            self.majority_class = []
-            self.minority_class = []
-            for i in indices:
-                sample = rsna[i]
-                label = 0 if np.array_equal(sample['lab'], [0.0, 0.0]) else 1
-                if label == 0:
-                    self.majority_class.append(sample)
-                else:
-                    self.minority_class.append(sample)
-
-            # Undersample the majority class
-            majority_count = len(self.minority_class)
-            self.majority_class = random.sample(self.majority_class, majority_count)
-
-            # Combine the classes
-            self.dataset = self.minority_class + self.majority_class
-        else:
-            self.dataset = rsna
+        self.dataset = rsna
 
     def __getitem__(self, index):
         sample = self.dataset[self.indices[index]]

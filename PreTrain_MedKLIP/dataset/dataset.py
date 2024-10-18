@@ -55,6 +55,7 @@ class MedKLIP_Dataset(Dataset):
     
     def __getitem__(self, index):
         img_path = self.img_path_list[index]
+        print()
         class_label = self.rad_graph_results[self.ann[img_path]["labels_id"],:,:] # (51, 75)
         labels = np.zeros(class_label.shape[-1]) -1
         labels, index_list = self.triplet_extraction(class_label)
