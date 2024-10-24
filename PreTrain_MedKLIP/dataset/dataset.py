@@ -8,6 +8,7 @@ from torchvision import transforms
 from PIL import Image
 import random
 from dataset.randaugment import RandomAugment
+import os
 
 class MedKLIP_Dataset(Dataset):
     def __init__(self, csv_path, np_path , mode = 'train'):
@@ -55,7 +56,10 @@ class MedKLIP_Dataset(Dataset):
     
     def __getitem__(self, index):
         img_path = self.img_path_list[index]
-        print()
+        if not os.path.exists(img_path):
+            # Skip this entry if the file does not exist
+            return None
+        # print()
         class_label = self.rad_graph_results[self.ann[img_path]["labels_id"],:,:] # (51, 75)
         labels = np.zeros(class_label.shape[-1]) -1
         labels, index_list = self.triplet_extraction(class_label)

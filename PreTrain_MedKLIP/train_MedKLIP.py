@@ -12,7 +12,7 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, default_collate
 import torch.backends.cudnn as cudnn
 
 from tensorboardX import SummaryWriter
@@ -21,11 +21,15 @@ import utils
 from scheduler import create_scheduler
 from optim import create_optimizer
 from dataset.dataset import MedKLIP_Dataset
-from dataset.mimic import MIMIC_Dataset
+# from dataset.mimic import MIMIC_Dataset
 from models.model_MedKLIP import MedKLIP
 from models.tokenization_bert import BertTokenizer
 import wandb
 
+
+def collate_fn(batch):
+    batch = [b for b in batch if b is not None]
+    return default_collate(batch)
 
 def get_tokenizer(tokenizer,target_text):
     
@@ -33,7 +37,7 @@ def get_tokenizer(tokenizer,target_text):
     
     return target_tokenizer
 
-def train(model, data_loader, optimizer, epoch, warmup_steps, device, scheduler, args, config, writer, val_loader=None, val_every_n_steps=500, lr_step_m=100, early_stopping_patience=5):
+def train(model, data_loader, optimizer, epoch, warmup_steps, device, scheduler, args, config, writer, val_loader=None, val_every_n_steps=500, lr_step_m=100, early_stopping_patience=100):
     model.train()  
     metric_logger = utils.MetricLogger(delimiter="  ")
     metric_logger.add_meter('lr', utils.SmoothedValue(window_size=50, fmt='{value:.6f}'))
@@ -76,13 +80,14 @@ def train(model, data_loader, optimizer, epoch, warmup_steps, device, scheduler,
         metric_logger.update(loss_cl=loss_cl.item())
 
         # Learning rate adjustment every m steps
-        if (i+1) % lr_step_m == 0:
-            scheduler.step(epoch + warmup_steps)
+        # if (i+1) % lr_step_m == 0:
+        #     scheduler.step(epoch + warmup_steps)
         
         # Validation every n steps
         if (i+1) % val_every_n_steps == 0 and val_loader:
             val_loss = valid(model, val_loader, epoch, device, config, writer)
-            print(f"Validation loss at step {i+1}: {val_loss}")
+            wandb.log({'valid/loss': val_loss})
+            # print(f"Validation loss at step {i+1}: {val_loss}")
             
             # Early stopping
             if val_loss < best_val_loss:
@@ -100,9 +105,9 @@ def train(model, data_loader, optimizer, epoch, warmup_steps, device, scheduler,
             else:
                 patience_counter += 1
             
-            if patience_counter >= early_stopping_patience:
+            if patience_counter >= early_stopping_patience and epoch > warmup_steps:
                 print("Early stopping triggered")
-                return
+                return {k: "{:.3f}".format(meter.global_avg) for k, meter in metric_logger.meters.items()} 
     
     # gather the stats from all processes
     metric_logger.synchronize_between_processes()
@@ -124,7 +129,7 @@ def valid(model, data_loader, epoch, device,config,writer):
         with torch.no_grad():
             loss,loss_ce,loss_cl = model(images,labels, index, is_train= True,no_cl = config['no_cl'],exclude_class = config['exclude_class'])
             val_loss.append(loss.item())
-            wandb.log({'valid/loss': loss.item(), 'valid/loss_ce': loss_ce.item(), 'valid/loss_cl': loss_cl.item()})
+            wandb.log({'valid/loss_total': loss.item(), 'valid/loss_ce': loss_ce.item(), 'valid/loss_cl': loss_cl.item()})
             writer.add_scalar('val_loss/loss', loss, val_scalar_step)
             writer.add_scalar('val_loss/loss_ce', loss_ce, val_scalar_step)
             writer.add_scalar('val_loss/loss_cl', loss_cl, val_scalar_step)
@@ -133,7 +138,7 @@ def valid(model, data_loader, epoch, device,config,writer):
     return avg_val_loss
 
 def main(args, config):
-    wandb.init(project=f'DeformableMedKLIP_pretrain', config=config)
+    wandb.init(project=f'DeformableMedKLIP_pretrain_final', config=config)
     device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print("Total CUDA devices: ", torch.cuda.device_count()) 
     torch.set_default_tensor_type('torch.FloatTensor')
@@ -145,8 +150,8 @@ def main(args, config):
 
     #### Dataset #### 
     print("Creating dataset")
-    # train_datasets = MedKLIP_Dataset(config['train_file'],config['label_file'], mode = 'train')
-    train_datasets = MIMIC_Dataset(config['mimic_file'],config['label_file'], mode = 'train')
+    train_datasets = MedKLIP_Dataset(config['train_file'],config['label_file'], mode = 'train')
+    # train_datasets = MIMIC_Dataset(config['mimic_file'],config['label_file'], mode = 'train')
     train_dataloader = DataLoader(
             train_datasets,
             batch_size=config['batch_size'],
@@ -154,12 +159,12 @@ def main(args, config):
             pin_memory=True,
             sampler=None,
             shuffle=True,
-            collate_fn=None,
+            collate_fn=collate_fn,
             drop_last=True,
         )     
     
-    # val_datasets = MedKLIP_Dataset(config['valid_file'],config['label_file'],mode ='train')
-    val_datasets = MIMIC_Dataset(config['mimic_file'],config['label_file'], mode = 'validate')
+    val_datasets = MedKLIP_Dataset(config['valid_file'],config['label_file'],mode ='train')
+    # val_datasets = MIMIC_Dataset(config['mimic_file'],config['label_file'], mode = 'validate')
     val_dataloader = DataLoader(
             val_datasets,
             batch_size=config['batch_size'],
@@ -167,7 +172,7 @@ def main(args, config):
             pin_memory=True,
             sampler=None,
             shuffle=True,
-            collate_fn=None,
+            collate_fn=collate_fn,
             drop_last=True,
         )   
 
@@ -204,8 +209,6 @@ def main(args, config):
         start_epoch = checkpoint['epoch']+1    
         model.load_state_dict(state_dict)    
         print('load checkpoint from %s'%args.checkpoint)
-        
-    
     
     print("Start training")
     start_time = time.time()
@@ -223,9 +226,9 @@ def main(args, config):
         writer.add_scalar('loss/train_loss_epoch', float(train_loss_epoch), epoch)
         writer.add_scalar('loss/leaning_rate',  lr_scheduler._get_lr(epoch)[0] , epoch)
 
-        # val_loss = valid(model, val_dataloader, epoch,device,config,writer)
-        # wandb.log({'valid/loss_epoch': val_loss})
-        # writer.add_scalar('loss/val_loss_epoch', val_loss, epoch)
+        val_loss = valid(model, val_dataloader, epoch,device,config,writer)
+        wandb.log({'valid/loss_epoch': val_loss})
+        writer.add_scalar('loss/val_loss_epoch', val_loss, epoch)
 
         if utils.is_main_process():  
             log_stats = {**{f'train_{k}': v for k, v in train_stats.items()},
@@ -243,7 +246,7 @@ def main(args, config):
             with open(os.path.join(args.output_dir, "log.txt"),"a") as f:
                 f.write(json.dumps(log_stats) + "\n")
 
-        if epoch>1:
+        if epoch%5==1:
             save_obj = {
                 'model': model.state_dict(),
                 'optimizer': optimizer.state_dict(),

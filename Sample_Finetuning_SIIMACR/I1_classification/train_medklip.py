@@ -175,8 +175,10 @@ def valid(model, data_loader, criterion,epoch,device,config,writer):
 
 
 def main(args, config):
-    wandb.init(project="DeformableMedKLIP", config=config)
-    device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    wandb.init(project="DeformableMedKLIP_debug", config=config)
+    # torch.cuda.empty_cache()
+    device='cpu'
+    # device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print("Total CUDA devices: ", torch.cuda.device_count()) 
     torch.set_default_tensor_type('torch.FloatTensor')
 
@@ -186,15 +188,24 @@ def main(args, config):
 
     #### Dataset #### 
     print("Creating dataset")
-    rsna = xrv.datasets.RSNA_Pneumonia_Dataset(imgpath=config['data_path'],views=["PA","AP"])  
+    if config['dataset'] == 'rsna':
+        dataset= xrv.datasets.RSNA_Pneumonia_Dataset(imgpath=config['data_path'],views=["PA","AP"])  
+    elif config['dataset'] == 'siim':
+        dataset= xrv.datasets.SIIM_Pneumothorax_Dataset(imgpath='/mnt/nas/Users/Mori/zuzanna/siim-original/dicom-images-train/', csvpath='/home/zuzanna/MedKLIP/siim.csv')
+    elif config['dataset'] == 'covid':
+        args.num_classes = 25
+        dataset= xrv.datasets.COVID19_Dataset(imgpath='/mnt/nas/Users/Mori/zuzanna/covid-chestxray-dataset/images',csvpath='/mnt/nas/Users/Mori/zuzanna/covid-chestxray-dataset/metadata.csv')
+    elif config['dataset'] == 'nih':
+        args.num_classes = 14
+        dataset = xrv.datasets.NIH_Dataset('/mnt/nas/Data_WholeBody/NIH_ChestX-ray8/images-224',views=["PA","AP"])  
     if config['undersample']:
         train_indices = np.load('/home/zuzanna/MedKLIP/Sample_Finetuning_SIIMACR/I1_classification/data_file/train_indices.npy').tolist()
         val_indices = np.load('/home/zuzanna/MedKLIP/Sample_Finetuning_SIIMACR/I1_classification/data_file/val_indices.npy').tolist()
     else:
-        indices = list(range(len(rsna)))
+        indices = list(range(len(dataset)))
         train_indices, val_indices = train_test_split(indices, test_size=0.3, random_state=42)
 
-    train_dataset = RSNA_Dataset(rsna, train_indices, is_train = True, undersample=config['undersample']) 
+    train_dataset = RSNA_Dataset(dataset, train_indices, is_train = True, undersample=config['undersample']) 
     train_dataloader = DataLoader(
             train_dataset,
             batch_size=config['batch_size'],
@@ -206,7 +217,7 @@ def main(args, config):
             drop_last=True,
         )            
     
-    val_dataset = RSNA_Dataset(rsna, val_indices, is_train = False) 
+    val_dataset = RSNA_Dataset(dataset, val_indices, is_train = False) 
     val_dataloader = DataLoader(
             val_dataset,
             batch_size=config['batch_size'],
@@ -234,7 +245,8 @@ def main(args, config):
     
     print("Creating model")
     model = MedKLIP(config,ana_book_tokenizer, disease_book_tokenizer)
-    model = nn.DataParallel(model, device_ids = [i for i in range(torch.cuda.device_count())])
+    if device == 'cuda':
+        model = nn.DataParallel(model, device_ids = [i for i in range(torch.cuda.device_count())])
     model = model.to(device)  
 
     # wandb.watch(model, log="all", log_freq=20)
@@ -259,6 +271,8 @@ def main(args, config):
         # print(model.module.classifier)
         checkpoint = torch.load(args.pretrain_path, map_location='cpu')
         state_dict = checkpoint['model']
+        # print("Checkpoint keys:", state_dict.keys())
+        # print("Model keys:", model.state_dict().keys())
         model_dict = model.state_dict()
         model_checkpoint = {k:v for k,v in state_dict.items() if k in model_dict}
         model_dict.update(model_checkpoint)
@@ -357,7 +371,7 @@ if __name__ == '__main__':
     parser.add_argument('--pretrain_path', default='')
     parser.add_argument('--output_dir', default='Path/To/Outputdir')
     parser.add_argument('--device', default='cuda')
-    parser.add_argument('--gpu', type=str,default='1', help='gpu')
+    parser.add_argument('--gpu', type=str,default='0', help='gpu')
     args = parser.parse_args()
 
     yaml = yaml.YAML(typ='rt')

@@ -144,7 +144,7 @@ class MedKLIP(nn.Module):
         out_emb = rearrange(x,'(b n) d -> b n d',b=batch_size)
         return out_emb
 
-    def forward(self, images):
+    def forward(self, images, return_intermediate=False):
         B = images.shape[0]
         
         device = images.device
@@ -200,6 +200,9 @@ class MedKLIP(nn.Module):
             # print('query_embed:',query_embed.shape)
             # query_embed: torch.Size([75, 2, 256])
             features = self.transformer(srcs, masks, pos, query_embed)
+
+        if return_intermediate:
+            return features
         out = self.dropout_feas(features)
         x= self.cls_classifier(out).transpose(0,1) #B query Atributes
 

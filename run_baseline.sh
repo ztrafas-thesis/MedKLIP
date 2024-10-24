@@ -1,2 +1,2 @@
-# python PreTrain_MedKLIP/train_MedKLIP.py --config PreTrain_MedKLIP/configs/baseline.yaml --output_dir output/pretrain/baseline
-python Sample_Finetuning_SIIMACR/I1_classification/train_medklip.py --config Sample_Finetuning_SIIMACR/I1_classification/configs/baseline.yaml --output_dir output/baseline_from_medklip --pretrain_path /home/zuzanna/vlm-chest-xray/checkpoints/checkpoint_final.pth
+# python PreTrain_MedKLIP/train_MedKLIP.py --config PreTrain_MedKLIP/configs/baseline.yaml --output_dir output/final/baseline_pretrain
+python Sample_Finetuning_SIIMACR/I1_classification/train_medklip.py --device cpu --config Sample_Finetuning_SIIMACR/I1_classification/configs/baseline.yaml --output_dir output/baseline_with --pretrain_path /home/zuzanna/MedKLIP/output/final/baseline_pretrain/checkpoint_state.pth
